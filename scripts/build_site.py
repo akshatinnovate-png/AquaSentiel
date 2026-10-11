@@ -301,6 +301,56 @@ PYODIDE_FILES = ("pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm",
                  "python_stdlib.zip", "pyodide-lock.json")
 
 
+# A stalled download must not hold a deploy open indefinitely. The first
+# attempt at this hung a Pages build on a step that takes under a minute when
+# it works, so the whole fetch is bounded in wall-clock time and the build
+# continues without the runtime rather than waiting on it.
+PYODIDE_DOWNLOAD_BUDGET_S = 150.0
+PYODIDE_ATTEMPTS = 2
+
+
+def _download(url: str) -> bytes:
+    """Fetch a URL with a hard overall deadline and a couple of retries."""
+    import socket
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    deadline = _time.monotonic() + PYODIDE_DOWNLOAD_BUDGET_S
+    last = None
+    for attempt in range(1, PYODIDE_ATTEMPTS + 1):
+        remaining = deadline - _time.monotonic()
+        if remaining <= 5:
+            break
+        # An explicit User-Agent: GitHub throttles unidentified clients, which
+        # is a plausible cause of a download that crawls rather than fails.
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "AquaSentinel-site-build/1.0",
+            "Accept": "application/octet-stream",
+        })
+        try:
+            chunks, total = [], 0
+            with urllib.request.urlopen(req, timeout=min(60.0, remaining)) as resp:
+                while True:
+                    if _time.monotonic() > deadline:
+                        raise TimeoutError(
+                            f"exceeded the {PYODIDE_DOWNLOAD_BUDGET_S:.0f}s budget "
+                            f"after {total / 1024 / 1024:.1f} MB")
+                    chunk = resp.read(1 << 18)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            if total < 1_000_000:
+                raise OSError(f"download was only {total} bytes; expected several MB")
+            return b"".join(chunks)
+        except (urllib.error.URLError, OSError, TimeoutError, socket.timeout) as exc:
+            last = exc
+            print(f"[build] pyodide: attempt {attempt} failed "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr)
+    raise last or TimeoutError("download budget exhausted")
+
+
 def vendor_pyodide(out_dir: pathlib.Path, cache: pathlib.Path | None = None) -> int:
     """Download the Pyodide core distribution into the site.
 
@@ -317,20 +367,20 @@ def vendor_pyodide(out_dir: pathlib.Path, cache: pathlib.Path | None = None) -> 
 
     cached = cache / f"pyodide-core-{PYODIDE_VERSION}.tar.bz2" if cache else None
     blob = None
-    if cached and cached.exists():
+    if cached and cached.exists() and cached.stat().st_size > 1_000_000:
         blob = cached.read_bytes()
         print(f"[build] pyodide: using cached {cached.name}", file=sys.stderr)
     else:
         try:
             print(f"[build] pyodide: downloading {PYODIDE_VERSION}…", file=sys.stderr)
-            with urllib.request.urlopen(PYODIDE_URL, timeout=180) as resp:
-                blob = resp.read()
+            blob = _download(PYODIDE_URL)
             if cached:
                 cached.parent.mkdir(parents=True, exist_ok=True)
                 cached.write_bytes(blob)
         except Exception as exc:
             print(f"[build] pyodide: NOT vendored ({type(exc).__name__}: {exc}). "
-                  f"The site will still work; the live engine will be unavailable.",
+                  f"The site still works; the live engine falls back to the CDN, and "
+                  f"to the recorded runs if that is unreachable too.",
                   file=sys.stderr)
             return 0
 

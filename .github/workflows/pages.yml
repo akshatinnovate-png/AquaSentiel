@@ -53,6 +53,20 @@ jobs:
           path: .cache
           key: pyodide-core-0.26.4
 
+      - name: Fetch the Python runtime
+        # Done here with curl rather than inside the build: curl retries,
+        # reports progress in the log, and has a hard timeout, so a slow
+        # mirror shows up as a failed step instead of a build that hangs.
+        # continue-on-error means a bad day for the mirror costs the live
+        # engine, not the deploy.
+        continue-on-error: true
+        run: |
+          mkdir -p .cache
+          f=.cache/pyodide-core-0.26.4.tar.bz2
+          if [ -s "$f" ]; then echo "already cached"; exit 0; fi
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors                --connect-timeout 20 --max-time 180                -o "$f"                https://github.com/pyodide/pyodide/releases/download/0.26.4/pyodide-core-0.26.4.tar.bz2
+          ls -l "$f"
+
       - name: Build the site
         # Bakes the recorded runs, bundles engine/ and sim/ for the browser,
         # and self-hosts the Python runtime so the live engine does not depend
