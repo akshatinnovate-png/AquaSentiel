@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# CDK
+infra/.venv/
+infra/cdk.out/
+infra/node_modules/
+node_modules/
+
+# Device credentials -- never commit these
+certs/
+.env.iot
+*.pem
+*.key
+
+# Local scratch
+.DS_Store
+*.log
