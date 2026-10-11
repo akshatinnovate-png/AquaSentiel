@@ -11,7 +11,7 @@ pandas, no scikit-learn. Every consequence below falls out of that:
 |---|---|
 | it runs unchanged in Lambda | no layers, no container, no build step; the deploy asset is the repo |
 | it runs unchanged on a laptop | `make demo` needs no AWS account and no `pip install` |
-| it runs unchanged in the test suite | 103 tests exercise the code that actually ships |
+| it runs unchanged in the test suite | 104 tests exercise the code that actually ships |
 | it runs unchanged in the eval harness | the published detection figures describe production code |
 
 The alternative — a cloud implementation and a separate "demo mode" — produces

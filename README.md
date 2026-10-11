@@ -5,6 +5,12 @@ heat-driven demand, on one operational dashboard.
 
 > Four risks. One network.
 
+### ▶ [See it running](https://akshatinnovate-png.github.io/AquaSentiel/)
+
+No install, no backend. The site replays scenarios through the **real detection
+engine** — and one click switches to running the actual Python in your browser,
+where the threshold sliders are live. [How that works](docs/LIVE_SITE.md).
+
 AquaSentinel turns raw sensor readings into *earlier, more actionable* warnings
 for the person who actually has to do something about them: the caretaker of a
 school, a community water manager, a municipal maintenance team.
@@ -32,7 +38,8 @@ a downpour onto a blocked drain. You will watch all four modules fire in order.
 
 ```bash
 make eval     # measure the detectors; writes eval/results/REPORT.md
-make test     # 103 unit and integration tests
+make test     # 104 unit and integration tests
+make site     # build the static site that GitHub Pages serves
 make deploy   # push the whole thing to AWS (100 resources, 17 services)
 ```
 
@@ -144,6 +151,10 @@ That is why `make demo` needs no cloud and `make deploy` needs no build step,
 and why the numbers in the table above describe the code that actually runs in
 production. There is no "local mode" branch anywhere in the business logic.
 
+It is also why the live site can run the engine **in a browser tab**: with no
+wheels to resolve and no compiled extensions, Pyodide unpacks a 61 KB zip of
+the source and imports it unchanged.
+
 ```
 engine/     detection and prediction — pure Python, no dependencies
 sim/        the virtual rig: physics-based sensors and ESP32 firmware behaviour
@@ -152,7 +163,7 @@ local/      a stdlib server exposing the same API offline
 web/        the dashboard — no build step, no external script or font
 infra/      AWS CDK stack
 eval/       the measurement harness that produced the table above
-tests/      103 tests, including one regression test per bug found
+tests/      104 tests, including one regression test per bug found
 ```
 
 ---
@@ -249,6 +260,7 @@ a 5 min EventBridge rule). `make destroy` removes it all.
 | [docs/DEMO.md](docs/DEMO.md) | The three-minute video, shot by shot |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | What this does not do, in detail |
 | [docs/12_HOUR_PLAN.md](docs/12_HOUR_PLAN.md) | The compressed build plan, and what to cut first |
+| [docs/LIVE_SITE.md](docs/LIVE_SITE.md) | The GitHub Pages build: recorded runs, the in-browser Python engine, and the workflows |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | Competition checklist |
 
 ---

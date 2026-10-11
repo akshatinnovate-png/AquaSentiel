@@ -1,0 +1,108 @@
+# Build and publish the live dashboard to GitHub Pages.
+#
+# Pages has no backend, so the site carries its own data two ways:
+#   * every scenario is driven through the real engine here and the timeline is
+#     baked to JSON, so the dashboard replays a recording of the real thing;
+#   * engine/ and sim/ are zipped in, so the browser can run the actual Python
+#     via Pyodide. That works only because the engine has no dependencies.
+name: Deploy dashboard to Pages
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "web/**"
+      - "engine/**"
+      - "sim/**"
+      - "scripts/build_site.py"
+      - "eval/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deploy half-finished; let it land, then run the next one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Refresh the measured results
+        # The site shows these on its "Devices & history" page, so they are
+        # regenerated rather than trusted from the commit.
+        run: python eval/run_eval.py
+
+      - name: Cache the Python runtime
+        # ~5.6 MB from a GitHub release. Cached so repeat builds do not
+        # re-download it, and keyed by version so a bump invalidates cleanly.
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: pyodide-core-0.26.4
+
+      - name: Build the site
+        # Bakes the recorded runs, bundles engine/ and sim/ for the browser,
+        # and self-hosts the Python runtime so the live engine does not depend
+        # on a third-party CDN being reachable.
+        run: python scripts/build_site.py --out site
+
+      - name: Report what was built
+        run: |
+          {
+            echo "## Site"
+            echo
+            echo '| Scenario | Frames | Size | Gzipped |'
+            echo '|---|---|---|---|'
+            python - <<'PY'
+          import json, pathlib
+          m = json.loads(pathlib.Path("site/data/manifest.json").read_text())
+          for s in m["scenarios"]:
+              print(f"| {s['title']} (`{s['name']}`) | {s['frames']} | "
+                    f"{s['bytes']/1024:.0f} KB | {s['gzip_bytes']/1024:.0f} KB |")
+          print()
+          print(f"Engine bundle for the in-browser runtime: "
+                f"{m['engine_bundle_bytes']/1024:.0f} KB")
+          py = m.get("pyodide", {})
+          if py.get("vendored"):
+              print(f"Python runtime self-hosted: {py['bytes']/1024/1024:.1f} MB "
+                    f"(Pyodide {py['version']})")
+          else:
+              print("> **Note:** the Python runtime was not vendored, so the live "
+                    "engine will fall back to a CDN. The recorded runs are unaffected.")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure Pages
+        # enablement:true turns Pages on for the repository the first time, so
+        # no manual settings change is needed before the first deploy.
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

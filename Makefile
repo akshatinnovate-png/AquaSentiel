@@ -12,7 +12,8 @@ SCENARIO ?= demo
 SPEED ?= 600
 
 .DEFAULT_GOAL := help
-.PHONY: help demo run sim eval test lint deploy destroy synth provision clean check
+.PHONY: help demo run sim eval test lint deploy destroy synth provision clean check \
+        site site-serve
 
 help:
 	@echo "AquaSentinel"
@@ -25,6 +26,8 @@ help:
 	@echo "                   eval/results/{metrics.json,REPORT.md}"
 	@echo "  make test        unit tests"
 	@echo "  make check       test + eval, the gate before a demo"
+	@echo "  make site        build the static site (what GitHub Pages serves)"
+	@echo "  make site-serve  build it and serve on http://127.0.0.1:8000"
 	@echo "  make synth       render the CloudFormation without deploying"
 	@echo "  make deploy      deploy to AWS (needs cdk bootstrap once)"
 	@echo "  make provision   issue an IoT device certificate for a node"
@@ -57,6 +60,17 @@ check: test eval
 
 lint:
 	@$(PY) -m compileall -q engine sim services local eval tests && echo "compiles clean"
+
+# The static site: recorded runs from the real engine, the engine bundled for
+# the browser, and a self-hosted Python runtime so the live mode needs no CDN.
+site:
+	$(PY) scripts/build_site.py --out site
+	@echo
+	@echo "--> site/  (open site/index.html, or run: make site-serve)"
+
+site-serve: site
+	@echo "--> http://127.0.0.1:8000"
+	@cd site && $(PY) -m http.server 8000 --bind 127.0.0.1
 
 synth:
 	cd infra && . .venv/bin/activate 2>/dev/null || true; \

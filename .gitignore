@@ -20,3 +20,5 @@ certs/
 # Local scratch
 .DS_Store
 *.log
+.cache/
+site/

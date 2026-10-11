@@ -264,3 +264,23 @@ class TestSupersededAlerts(unittest.TestCase):
         note = svc.overview()["devices"][0]["supply_outlook"]["note"]
         self.assertIn("empty", note.lower())
         self.assertNotIn("0 L to spare", note)
+
+
+class TestOutlookWording(unittest.TestCase):
+    def test_a_near_zero_draw_does_not_claim_a_precise_eta(self):
+        """A 169.9 h figure off an overnight trickle implies an accuracy the
+        measurement cannot support."""
+        svc, box = service()
+        for i in range(60):
+            ts = T0 + i * 15
+            box["t"] = ts
+            svc.ingest({"device_id": "n1", "timestamp": ts,
+                        "readings": {"tank_level_cm": 90.0 + (i % 3) * 0.01,
+                                     "flow_lpm": 0.02,
+                                     "temperature_c": 24 + (i % 5) * 0.1,
+                                     "humidity_pct": 70 + (i % 4) * 0.1}}, now=ts)
+        note = svc.overview()["devices"][0]["supply_outlook"]["note"]
+        import re
+        big = [float(m) for m in re.findall(r"estimate is ([0-9.]+) h", note)]
+        self.assertFalse([v for v in big if v > 48],
+                         f"outlook quotes an over-precise ETA: {note}")

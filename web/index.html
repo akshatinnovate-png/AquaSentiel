@@ -54,6 +54,10 @@
 
   <nav class="views" role="tablist" aria-label="Dashboard sections"></nav>
 
+  <!-- Which run, where in it, and how fast. On a static host there is no
+       backend pushing readings, so the page supplies its own transport. -->
+  <div class="controls" id="controls" aria-label="Playback and data source"></div>
+
   <main id="views"></main>
 
   <footer class="foot">
@@ -69,7 +73,12 @@
 
 </div>
 
+<!-- config.js is written at deploy time by the CDK stack and points the
+     dashboard at a real backend. It is absent on the static site, which is
+     why it is loaded defensively rather than required. -->
+<script src="config.js"></script>
 <script src="charts.js"></script>
+<script src="sources.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

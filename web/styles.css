@@ -229,7 +229,9 @@ nav.views .badge {
 .panel-head h2 { margin: 0; }
 .panel-head .hint { font-size: 0.72rem; color: var(--ink-3); margin-left: auto; }
 
-.grid { display: grid; gap: 14px; }
+/* Cards size to their own content rather than stretching to match the
+ * tallest in the row, which left large empty panels beside a long explainer. */
+.grid { display: grid; gap: 14px; align-items: start; }
 .grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -479,11 +481,118 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .banner svg { flex: 0 0 auto; margin-top: 1px; }
 
 .view { display: none; }
-.view.on { display: block; animation: fade 0.18s ease-out; }
+.view.on { display: block; }
+
+/* The entrance animation runs on a view CHANGE, never on a data update.
+ *
+ * It used to be on `.view.on` itself. Re-rendering replaces that element, so
+ * the animation restarted on every render -- and with a live source pushing
+ * frames five times a second against a 0.18s fade, the content never reached
+ * full opacity. The entire dashboard was invisible whenever data was actually
+ * streaming, which is precisely when it matters. It looked fine in screenshots
+ * only because playback had finished and stopped re-rendering. */
+.view.on.enter { animation: fade 0.18s ease-out; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .view.on { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .view.on.enter { animation: none; } }
 
 .stack { display: grid; gap: 14px; }
 .row-wrap { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 footer.foot { margin-top: 26px; font-size: 0.74rem; color: var(--ink-3); text-align: center; line-height: 1.7; }
 footer.foot a { color: var(--accent); }
+
+/* ------------------------------------------------------- playback bar ---
+ * On a static host there is no backend pushing readings, so the page needs
+ * its own transport: which run, where in it, and how fast. It sits directly
+ * under the nav because it changes what every view below is showing.
+ */
+.controls {
+  background: var(--glass); border: 1px solid var(--glass-border);
+  border-radius: var(--radius); padding: 11px 14px; margin-bottom: 18px;
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--shadow);
+}
+.ctl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ctl-row.sub { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--hairline); }
+.ctl-note { font-size: 0.78rem; color: var(--ink-3); min-width: 0; }
+.ctl-pct {
+  font-size: 0.76rem; color: var(--ink-2); font-variant-numeric: tabular-nums;
+  min-width: 2.8em; text-align: right;
+}
+
+/* A two-state segmented control: recorded run vs the live engine. */
+.seg {
+  display: inline-flex; padding: 3px; border-radius: 999px;
+  background: var(--accent-soft); border: 1px solid var(--hairline);
+}
+.seg button {
+  font: inherit; font-size: 0.78rem; font-weight: 560; cursor: pointer;
+  border: 0; background: transparent; color: var(--ink-2);
+  padding: 5px 13px; border-radius: 999px; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] {
+  background: var(--glass-solid); color: var(--accent); font-weight: 650;
+  box-shadow: 0 1px 3px rgba(13, 38, 63, 0.14);
+}
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ctl-field { display: inline-flex; align-items: center; gap: 7px; font-size: 0.78rem; color: var(--ink-3); }
+.ctl-field > span { white-space: nowrap; }
+.ctl-field select, .tune select {
+  font: inherit; font-size: 0.78rem; color: var(--ink);
+  background: var(--glass-solid); border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 5px 9px; cursor: pointer; max-width: 220px;
+}
+.ctl-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+button.ghost.play { font-weight: 600; color: var(--accent); display: inline-flex; align-items: center; gap: 6px; }
+
+/* One range-input treatment for the scrubber and the threshold sliders. */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none; background: transparent;
+  flex: 1 1 140px; min-width: 110px; height: 20px; cursor: pointer; margin: 0;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 999px; background: var(--accent-soft);
+  border: 1px solid var(--hairline);
+}
+input[type="range"]::-moz-range-track {
+  height: 5px; border-radius: 999px; background: var(--accent-soft);
+  border: 1px solid var(--hairline);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%; margin-top: -5.5px;
+  background: var(--accent); border: 2px solid var(--glass-solid);
+  box-shadow: 0 1px 4px rgba(13, 38, 63, 0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--glass-solid);
+  background: var(--accent); box-shadow: 0 1px 4px rgba(13, 38, 63, 0.3);
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------------------------------------------------- threshold tuner --- */
+.tune {
+  background: var(--glass-strong); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 13px 15px;
+}
+.tune.off { opacity: 0.62; }
+.tune label {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 7px;
+}
+.tune .tune-label { font-size: 0.82rem; font-weight: 600; color: var(--ink); }
+.tune output {
+  font-size: 1.02rem; font-weight: 650; color: var(--accent);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tune output .unit { font-size: 0.72rem; color: var(--ink-3); margin-left: 2px; font-weight: 520; }
+.tune input[type="range"] { width: 100%; flex: none; }
+.tune .tune-help { font-size: 0.75rem; color: var(--ink-3); margin: 7px 0 0; line-height: 1.45; }
+
+@media (max-width: 680px) {
+  .ctl-row { gap: 8px; }
+  .ctl-field select { max-width: 150px; }
+  input[type="range"] { flex-basis: 100%; }
+}

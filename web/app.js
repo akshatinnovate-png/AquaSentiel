@@ -11,10 +11,11 @@
 
   const { timeSeries, spark, tankGauge, fmt, clockDateTime, duration } = window.Charts;
 
-  // API base: same origin for the local server; override for a deployed stack
-  // by setting window.AQUASENTINEL_API before this script runs.
-  const API = (window.AQUASENTINEL_API || "").replace(/\/$/, "");
-  const url = (path) => `${API}${path}`;
+  // Where the data comes from is decided at startup -- a running backend, a
+  // run recorded by the real engine in CI, or the real engine itself compiled
+  // to WebAssembly. All three produce the same shapes, so everything below
+  // this line is written once.
+  let SOURCE = null;
 
   const SEV = ["OK", "INFO", "WATCH", "WARNING", "CRITICAL"];
   const SEV_COLOR = {
@@ -44,28 +45,54 @@
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
   // ---- state -------------------------------------------------------------
-  const state = { overview: null, details: {}, metrics: null, view: "overview", error: null };
+  const state = {
+    overview: null, details: {}, metrics: null, view: "overview", error: null,
+    mode: "replay", scenario: null, scenarios: [], engineStatus: "", engineError: null,
+    engineLoading: false,
+    engineConfig: null, booting: true,
+  };
 
-  // ---- fetching ----------------------------------------------------------
-  async function getJSON(path) {
-    const res = await fetch(url(path), { headers: { accept: "application/json" } });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${path}`);
-    return res.json();
+  let refreshing = false;
+  let lastRenderedView = null;
+  let renderQueued = false;
+  let lastRenderAt = 0;
+
+  /* Coalesce data-driven renders.
+   *
+   * A live source pushes frames several times a second. Rebuilding the whole
+   * view that often is wasted work, and it tears down anything the reader had
+   * open. Rendering at most every 350 ms still looks continuous. */
+  const MIN_RENDER_GAP_MS = 350;
+
+  function scheduleRender() {
+    if (renderQueued) return;
+    const wait = Math.max(0, MIN_RENDER_GAP_MS - (Date.now() - lastRenderAt));
+    renderQueued = true;
+    setTimeout(() => {
+      renderQueued = false;
+      render();
+    }, wait);
   }
 
   async function refresh() {
+    // Playback can tick faster than a refresh completes; overlapping passes
+    // would interleave and render a half-updated page.
+    if (refreshing) return;
+    refreshing = true;
     try {
-      state.overview = await getJSON("/overview");
+      state.overview = await SOURCE.overview();
       state.error = null;
       const devices = (state.overview.devices || []).map((d) => d.device_id).filter(Boolean);
       await Promise.all(devices.map(async (id) => {
-        try { state.details[id] = await getJSON(`/devices/${encodeURIComponent(id)}`); }
-        catch (e) { /* a single node failing must not blank the whole page */ }
+        try { state.details[id] = await SOURCE.deviceDetail(id); }
+        catch (e) { /* one node failing must not blank the whole page */ }
       }));
     } catch (err) {
       state.error = err.message;
+    } finally {
+      refreshing = false;
     }
-    render();
+    scheduleRender();
   }
 
   // ---- small render helpers ---------------------------------------------
@@ -801,6 +828,402 @@
     container.appendChild(svg);
   }
 
+  // ====================================================================
+  // Boot: choose a source, and fall back rather than fail
+  // ====================================================================
+  async function boot() {
+    // 1. An explicitly configured backend wins (the CDK deploy injects this).
+    //    config.js ships as a stub that leaves this null, so a static build
+    //    falls through to the recorded runs.
+    if (typeof window.AQUASENTINEL_API === "string" && window.AQUASENTINEL_API) {
+      SOURCE = new window.Sources.ApiSource(window.AQUASENTINEL_API);
+      state.mode = "api";
+      state.booting = false;
+      await refresh();
+      setInterval(refresh, 4000);
+      return loadMetrics();
+    }
+
+    // 2. A static build carries recorded runs. This is the GitHub Pages case.
+    const replay = new window.Sources.ReplaySource(() => refresh());
+    let haveReplay = false;
+    try {
+      await replay.start(initialScenario());
+      haveReplay = true;
+    } catch (e) {
+      state.engineError = e.message;
+    }
+
+    if (haveReplay) {
+      SOURCE = replay;
+      state.mode = "replay";
+      state.scenarios = replay.scenarios();
+      state.scenario = replay.scenario;
+      state.booting = false;
+      await refresh();
+      replay.controls.play();
+      return loadMetrics();
+    }
+
+    // 3. Otherwise assume a backend on this origin -- the local dev server.
+    SOURCE = new window.Sources.ApiSource("");
+    state.mode = "api";
+    state.booting = false;
+    await refresh();
+    setInterval(refresh, 4000);
+    return loadMetrics();
+  }
+
+  function initialScenario() {
+    const m = /[?&]scenario=([A-Za-z0-9_-]+)/.exec(location.search);
+    return m ? m[1] : null;
+  }
+
+  function loadMetrics() {
+    return SOURCE.metrics().then((m) => {
+      state.metrics = m;
+      if (state.view === "devices") render();
+    }).catch(() => { /* measured results are optional */ });
+  }
+
+  /* Switch between the recorded run and the live Python engine.
+   *
+   * The live engine downloads a WebAssembly CPython, so it is opt-in and it
+   * must never strand the page: any failure drops back to the recording with
+   * the reason shown. */
+  async function setMode(mode) {
+    if (mode === state.mode || state.mode === "api") return;
+    if (mode === "pyodide") {
+      state.engineStatus = "starting the Python runtime…";
+      state.engineError = null;
+      state.engineLoading = true;
+      render();
+      const py = new window.Sources.PyodideSource(
+        () => refresh(),
+        (text) => { state.engineStatus = text; render(); });
+      try {
+        await py.start(state.scenario || "demo");
+        SOURCE = py;
+        state.mode = "pyodide";
+        state.engineConfig = py.config;
+        state.engineStatus = "running the real Python engine in this browser";
+      } catch (err) {
+        state.engineError = err.message;
+        state.engineStatus = "";
+        // Stay on the recording. A failed upgrade is not a broken page.
+      } finally {
+        state.engineLoading = false;
+      }
+      render();
+      return refresh();
+    }
+    const replay = new window.Sources.ReplaySource(() => refresh());
+    await replay.start(state.scenario);
+    SOURCE = replay;
+    state.mode = "replay";
+    state.scenarios = replay.scenarios();
+    render();
+    await refresh();
+    replay.controls.play();
+  }
+
+  async function setScenario(name) {
+    state.scenario = name;
+    try {
+      await SOURCE.start(name);
+    } catch (err) {
+      state.error = err.message;
+    }
+    await refresh();
+    if (SOURCE.controls && SOURCE.controls.play) SOURCE.controls.play();
+  }
+
+  // ====================================================================
+  // The playback bar
+  // ====================================================================
+  function renderControls() {
+    const bar = $("#controls");
+    if (!bar) return;
+    if (state.mode === "api") {
+      bar.innerHTML = `<div class="ctl-row">
+        <span class="pill"><span class="dot live"></span>Connected to a running backend</span>
+        <span class="ctl-note">Readings arrive as the nodes send them.</span></div>`;
+      return;
+    }
+
+    const c = SOURCE && SOURCE.controls;
+    const playing = c ? (c.playing === true || (c.playback && c.playback.playing)) : false;
+    const progress = c ? (typeof c.progress === "number" ? c.progress : c.progress) : 0;
+    const pct = Math.round((progress || 0) * 100);
+    const live = state.mode === "pyodide";
+    const scen = (state.scenarios || []).find((s) => s.name === state.scenario);
+
+    bar.innerHTML = `
+      <div class="ctl-row">
+        <div class="seg" role="group" aria-label="Where the data comes from">
+          <button type="button" data-mode="replay" aria-pressed="${!live}">Recorded run</button>
+          <button type="button" data-mode="pyodide" aria-pressed="${live}">Live engine</button>
+        </div>
+
+        ${state.scenarios.length ? `<label class="ctl-field">
+          <span>Scenario</span>
+          <select id="ctl-scenario">${state.scenarios.map((s) =>
+            `<option value="${esc(s.name)}"${s.name === state.scenario ? " selected" : ""}>${esc(s.title)}</option>`).join("")}</select>
+        </label>` : ""}
+
+        <button type="button" class="ghost play" id="ctl-play" aria-label="${playing ? "Pause" : "Play"}">
+          ${playing
+            ? '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="1" fill="currentColor"/><rect x="7" y="1.5" width="3" height="9" rx="1" fill="currentColor"/></svg> Pause'
+            : '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.8l7 4.2-7 4.2z" fill="currentColor"/></svg> Play'}
+        </button>
+
+        <label class="ctl-field">
+          <span>Speed</span>
+          <select id="ctl-speed">
+            ${[1, 2, 4, 8, 16].map((s) => `<option value="${s}"${(c && c.speed === s) ? " selected" : ""}>${s}&times;</option>`).join("")}
+          </select>
+        </label>
+
+        <input type="range" id="ctl-seek" min="0" max="1000" value="${Math.round((progress || 0) * 1000)}"
+               aria-label="Scrub through the run" ${live ? "disabled" : ""}
+               title="${live ? "The live engine runs forward; it cannot rewind" : "Scrub"}">
+        <span class="ctl-pct">${pct}%</span>
+        <button type="button" class="ghost" id="ctl-restart">Restart</button>
+      </div>
+      <div class="ctl-row sub">
+        ${live
+          ? `<span class="pill"><span class="dot live"></span>Real Python engine, in this browser</span>`
+          : `<span class="pill">Recorded from the real engine in CI</span>`}
+        <span class="ctl-note">${esc(scen ? scen.blurb : (state.engineStatus || ""))}</span>
+        ${state.engineStatus && live ? `<span class="ctl-note">${esc(state.engineStatus)}</span>` : ""}
+        ${state.engineError ? `<span class="stale-flag">live engine unavailable: ${esc(state.engineError)}</span>` : ""}
+      </div>`;
+  }
+
+  function wireControls() {
+    const bar = $("#controls");
+    if (!bar) return;
+    bar.addEventListener("click", (e) => {
+      const mode = e.target.closest("button[data-mode]");
+      if (mode) return setMode(mode.dataset.mode);
+      if (e.target.closest("#ctl-play")) {
+        const c = SOURCE && SOURCE.controls;
+        if (c && c.toggle) c.toggle();
+        else if (c && c.playing) c.pause();
+        else if (c) c.play();
+        renderControls();
+        return;
+      }
+      if (e.target.closest("#ctl-restart")) {
+        const c = SOURCE && SOURCE.controls;
+        if (c && c.restart) c.restart();
+        if (c && c.play) c.play();
+        renderControls();
+      }
+    });
+    bar.addEventListener("change", (e) => {
+      if (e.target.id === "ctl-scenario") return setScenario(e.target.value);
+      if (e.target.id === "ctl-speed") {
+        const c = SOURCE && SOURCE.controls;
+        if (c && c.setSpeed) c.setSpeed(Number(e.target.value));
+      }
+    });
+    bar.addEventListener("input", (e) => {
+      if (e.target.id === "ctl-seek") {
+        const c = SOURCE && SOURCE.controls;
+        if (c && c.seek) { c.pause && c.pause(); c.seek(Number(e.target.value) / 1000); }
+      }
+    });
+  }
+
+  // ====================================================================
+  // The "Live engine" view -- the part a recording cannot do
+  // ====================================================================
+  const TUNABLES = [
+    { section: "flood", key: "danger_cm", label: "Flood danger depth", unit: "cm",
+      min: 5, max: 60, step: 1,
+      help: "The surveyed depth at which this location is unsafe. Site configuration, not a public-safety limit." },
+    { section: "flood", key: "rise_warn_cm_min", label: "Fast-rise threshold", unit: "cm/min",
+      min: 0.2, max: 5, step: 0.1,
+      help: "A rate of rise above this is a warning, if water is actually present." },
+    { section: "leak", key: "min_night_flow_lpm", label: "Minimum night flow", unit: "L/min",
+      min: 0.05, max: 2, step: 0.05,
+      help: "Sustained idle-hour flow above this counts as evidence of loss — the most specific leak signal there is." },
+    { section: "tank", key: "low_pct", label: "Tank low level", unit: "%",
+      min: 5, max: 60, step: 1,
+      help: "Below this the stored supply is reported as low." },
+    { section: "tank", key: "eta_warn_hours", label: "Depletion warning", unit: "h",
+      min: 1, max: 24, step: 0.5,
+      help: "A projected time-to-empty below this warns — but only once the level is itself getting low." },
+    { section: "demand", key: "heat_index_watch_c", label: "Heat advisory level", unit: "°C",
+      min: 30, max: 55, step: 0.5,
+      help: "Absolute heat index for a watch. An alert also needs a departure from this site's own normal peak." },
+    { section: "demand", key: "heat_anomaly_watch_c", label: "Departure from normal", unit: "°C",
+      min: 0, max: 10, step: 0.5,
+      help: "How far today's peak must exceed this site's usual peak. Set this to 0 to reproduce the naive absolute-threshold detector." },
+  ];
+
+  // What the site ships with, for the reset button.
+  const DEFAULT_TUNABLES = {
+    flood: { danger_cm: 18, rise_warn_cm_min: 1.0 },
+    leak: { min_night_flow_lpm: 0.25 },
+    tank: { low_pct: 25, eta_warn_hours: 6 },
+    demand: { heat_index_watch_c: 41, heat_anomaly_watch_c: 2 },
+  };
+
+  function renderEngine() {
+    const live = state.mode === "pyodide";
+    const cfg = state.engineConfig;
+
+    const explainer = `
+      <div class="grid c2" style="margin-bottom:14px">
+        <div class="panel stack">
+          <div class="panel-head"><h2>What is actually running</h2></div>
+          <div class="note"><span class="h">Recorded run</span>
+            Every scenario was driven through the real detection engine in CI, and the
+            resulting timeline baked into this site. It is a recording of the real thing,
+            not a reconstruction: each situation report came out of the same
+            <code>Engine.ingest</code> a deployed backend calls. It loads instantly and
+            needs nothing but static files.</div>
+          <div class="note"><span class="h">Live engine</span>
+            Loads CPython compiled to WebAssembly and runs <code>engine/</code> and
+            <code>sim/</code> unmodified, in this tab. No server, no API. That is only
+            possible because the engine imports nothing outside the standard library
+            &mdash; a constraint chosen so the same code could run in Lambda, on a laptop
+            and in the tests, paying off a fourth time.</div>
+          <div class="note warn"><span class="h">The difference that matters</span>
+            In the recording the thresholds below are fixed; it is a video. With the live
+            engine running, changing one re-runs real detection from that moment on, and
+            every number afterwards is computed in front of you.</div>
+        </div>
+        <div class="panel stack">
+          <div class="panel-head"><h2>Engine</h2>
+            <span class="hint">${live ? "WebAssembly CPython" : "not loaded"}</span></div>
+          <div class="row-wrap">
+            <span class="pill"><span class="dot ${live ? "live" : "down"}"></span>
+              ${live ? "live Python engine" : "recorded run"}</span>
+            ${state.engineStatus ? `<span class="pill">${esc(state.engineStatus)}</span>` : ""}
+          </div>
+          ${state.engineError ? `<div class="note strong"><span class="h">The live engine could not start</span>
+            ${esc(state.engineError)} &mdash; the recorded run is still showing, so nothing here is
+            broken. The runtime comes from a public CDN; a blocked network is the usual cause.</div>` : ""}
+          ${!live ? `<div class="note">Switch to <b>Live engine</b> in the bar above to run the real
+            Python here. It fetches about 10&nbsp;MB of WebAssembly runtime the first time, then
+            starts in a couple of seconds.</div>` : ""}
+          ${live && cfg ? `<div class="scroll-x"><table class="data">
+            <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Site</td><td class="num">${esc(cfg.name || "")}</td></tr>
+              <tr><td class="name">Tank capacity</td><td class="num">${esc(fmt((cfg.tank || {}).capacity_l, 0))} L</td></tr>
+              <tr><td class="name">Sample interval</td><td class="num">${esc(cfg.sample_interval_s)} s</td></tr>
+              <tr><td class="name">Calibration</td><td class="num">${cfg.calibrated ? "surveyed" : "demonstration values"}</td></tr>
+            </tbody></table></div>` : ""}
+        </div>
+      </div>`;
+
+    const sliders = `
+      <div class="panel">
+        <div class="panel-head"><h2>Thresholds</h2>
+          <span class="hint">${live ? "changes re-run real detection" : "read-only while replaying a recording"}</span></div>
+        <div class="grid c2">
+          ${TUNABLES.map((tn) => {
+            const section = (cfg || {})[tn.section] || {};
+            const value = section[tn.key];
+            const fallback = (DEFAULT_TUNABLES[tn.section] || {})[tn.key];
+            const shown = value === undefined ? fallback : value;
+            return `<div class="tune${live ? "" : " off"}">
+              <label for="tune-${tn.section}-${tn.key}">
+                <span class="tune-label">${esc(tn.label)}</span>
+                <output id="out-${tn.section}-${tn.key}">${esc(shown)}<span class="unit">${esc(tn.unit)}</span></output>
+              </label>
+              <input type="range" id="tune-${tn.section}-${tn.key}"
+                     data-section="${tn.section}" data-key="${tn.key}"
+                     min="${tn.min}" max="${tn.max}" step="${tn.step}"
+                     value="${shown}" ${live ? "" : "disabled"}>
+              <p class="tune-help">${esc(tn.help)}</p>
+            </div>`;
+          }).join("")}
+        </div>
+        ${live ? `<div class="row-wrap" style="margin-top:14px">
+          <button class="ghost" id="tune-apply">Apply and re-run detection</button>
+          <button class="ghost" id="tune-reset">Back to the surveyed values</button>
+        </div>` : ""}
+      </div>`;
+
+    const tryIt = `
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><h2>Things worth trying</h2>
+          <span class="hint">with the live engine running</span></div>
+        <ol class="queue">
+          <li><span class="rank">1</span><div>
+            <div class="what">Set <b>Departure from normal</b> to 0</div>
+            <div class="why">That removes the IMD-style second gate and leaves a bare absolute
+              threshold &mdash; the naive detector. Run the quiet day and watch heat alerts appear
+              on an ordinary afternoon. This is the change that took the measured false-alarm
+              count from 32 to zero, run backwards.</div></div><span></span></li>
+          <li><span class="rank">2</span><div>
+            <div class="what">Raise <b>Minimum night flow</b> above 0.6 L/min</div>
+            <div class="why">Then run the water-loss scenario. The leak is 0.6 L/min, so the most
+              specific detector stops firing and the alert comes late on weaker evidence, or not
+              at all. A threshold is a choice between missing things and crying wolf.</div></div>
+            <span></span></li>
+          <li><span class="rank">3</span><div>
+            <div class="what">Lower the <b>Flood danger depth</b> to 8 cm</div>
+            <div class="why">The flood scenario then reaches "danger" far sooner. Nothing about the
+              water changed &mdash; only the survey. It is the clearest demonstration that these
+              numbers are site configuration, not physics.</div></div><span></span></li>
+        </ol>
+      </div>`;
+
+    return explainer + sliders + tryIt;
+  }
+
+  function wireEngineView() {
+    const apply = $("#tune-apply");
+    if (apply) {
+      apply.addEventListener("click", () => {
+        const patch = {};
+        $$("input[data-section]").forEach((input) => {
+          (patch[input.dataset.section] = patch[input.dataset.section] || {})[input.dataset.key] =
+            Number(input.value);
+        });
+        if (SOURCE && SOURCE.applyConfig) {
+          SOURCE.applyConfig(patch);
+          const next = Object.assign({}, state.engineConfig);
+          for (const section of Object.keys(patch)) {
+            next[section] = Object.assign({}, next[section], patch[section]);
+          }
+          state.engineConfig = next;
+          state.engineStatus = "thresholds applied; detection re-running from here";
+          render();
+        }
+      });
+    }
+    const reset = $("#tune-reset");
+    if (reset) {
+      reset.addEventListener("click", () => {
+        if (SOURCE && SOURCE.applyConfig) {
+          // The reset goes through the same path as any other change, so it
+          // cannot drift from what applying actually does.
+          SOURCE.applyConfig(DEFAULT_TUNABLES);
+          const next = Object.assign({}, state.engineConfig);
+          for (const section of Object.keys(DEFAULT_TUNABLES)) {
+            next[section] = Object.assign({}, next[section], DEFAULT_TUNABLES[section]);
+          }
+          state.engineConfig = next;
+          state.engineStatus = "thresholds restored to the surveyed values";
+          render();
+        }
+      });
+    }
+    $$("input[data-section]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const out = $(`#out-${input.dataset.section}-${input.dataset.key}`);
+        if (out && out.firstChild) out.firstChild.nodeValue = input.value;
+      });
+    });
+  }
+
   // ---- shell -------------------------------------------------------------
   const VIEWS = {
     overview: { label: "Overview", render: renderOverview },
@@ -809,10 +1232,17 @@
     tank: { label: "Tanks", render: renderTank },
     demand: { label: "Heat & demand", render: renderDemand },
     devices: { label: "Devices & history", render: renderDevices },
+    engine: { label: "Live engine", render: renderEngine },
   };
 
   function render() {
     const host = $("#views");
+    renderControls();
+    if (state.booting) {
+      host.innerHTML = `<div class="panel"><div class="empty"><span class="big">◌</span>
+        Loading the recorded run&hellip;</div></div>`;
+      return;
+    }
     if (state.error && !state.overview) {
       host.innerHTML = `<div class="panel"><div class="empty">
         <span class="big">!</span>Cannot reach the API.<br><code>${esc(state.error)}</code><br><br>
@@ -820,15 +1250,39 @@
         <code>window.AQUASENTINEL_API</code> to a deployed endpoint.</div></div>`;
       return;
     }
-    if (!state.overview) {
+    if (!state.overview && state.view !== "engine") {
       host.innerHTML = `<div class="panel"><div class="empty"><span class="big">◌</span>Waiting for the first reading&hellip;</div></div>`;
       return;
     }
+    // The engine view explains and configures the engine; it does not need a
+    // reading to have arrived yet.
+    if (!state.overview) {
+      state.overview = { site: {}, devices: [], active_alerts: [],
+                         inspection_queue: [], overall_severity: 0, overall_label: "OK" };
+    }
 
-    host.innerHTML = Object.keys(VIEWS).map((key) =>
-      `<section class="view${key === state.view ? " on" : ""}" id="view-${key}" role="tabpanel" aria-labelledby="tab-${key}">
-        ${key === state.view ? VIEWS[key].render() : ""}
-      </section>`).join("");
+    host.innerHTML = Object.keys(VIEWS).map((key) => {
+      let body = "";
+      if (key === state.view) {
+        try {
+          body = VIEWS[key].render();
+        } catch (err) {
+          // One view failing must not blank the dashboard. An empty page with
+          // a healthy-looking status bar is the worst possible failure for a
+          // monitoring tool: it looks like "nothing is wrong".
+          console.error(`view "${key}" failed to render`, err);
+          body = `<div class="panel"><div class="note strong">
+            <span class="h">This view could not be rendered</span>
+            ${esc(String((err && err.message) || err))}. The other tabs are unaffected,
+            and the data behind this one is still arriving.</div></div>`;
+        }
+      }
+      // `enter` animates only when the view actually changed. Applying it on
+      // every render made the page flicker to invisible under a live source.
+      const entering = key === state.view && key !== lastRenderedView;
+      return `<section class="view${key === state.view ? " on" : ""}${entering ? " enter" : ""}"
+               id="view-${key}" role="tabpanel" aria-labelledby="tab-${key}">${body}</section>`;
+    }).join("");
 
     // header state
     const o = state.overview;
@@ -852,7 +1306,15 @@
       badge.style.display = activeCount ? "inline-block" : "none";
     }
 
-    drawCharts();
+    lastRenderedView = state.view;
+    lastRenderAt = Date.now();
+    try {
+      drawCharts();
+    } catch (err) {
+      // Charts are an enhancement; the numbers above them are the point.
+      console.error("charts failed to draw", err);
+    }
+    if (state.view === "engine") wireEngineView();
   }
 
   function go(view) {
@@ -873,6 +1335,7 @@
       const btn = e.target.closest("button[data-view]");
       if (btn) go(btn.dataset.view);
     });
+    wireControls();
 
     document.addEventListener("click", async (e) => {
       const ack = e.target.closest("button[data-ack]");
@@ -880,11 +1343,7 @@
       ack.disabled = true;
       ack.textContent = "Acknowledging…";
       try {
-        await fetch(url(`/alerts/${encodeURIComponent(ack.dataset.ack)}/ack`), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ who: "caretaker" }),
-        });
+        await SOURCE.acknowledge(ack.dataset.ack, "caretaker");
         await refresh();
       } catch (err) {
         ack.disabled = false;
@@ -910,11 +1369,7 @@
     window.addEventListener("hashchange", () => go(location.hash.slice(1) || "overview"));
     state.view = location.hash.slice(1) || "overview";
 
-    getJSON("/metrics").then((m) => { state.metrics = m; if (state.view === "devices") render(); })
-      .catch(() => { /* metrics are optional */ });
-
-    refresh();
-    setInterval(refresh, 4000);
+    boot();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount);

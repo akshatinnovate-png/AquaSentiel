@@ -1,0 +1,148 @@
+# Tests, measurement and infrastructure checks.
+#
+# The measurement step is the important one. `eval/run_eval.py` exits non-zero
+# on a missed detection, a false alarm or a crashed module, so a change that
+# quietly degrades the detectors fails the build rather than fails in a demo.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and measurement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Everything compiles
+        run: python -m compileall -q engine sim services local eval tests scripts
+
+      - name: Unit and integration tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Measure the detectors
+        # Regenerates eval/results/ and fails on any missed detection, false
+        # alarm or module error.
+        run: python eval/run_eval.py
+
+      - name: Published figures still match the measurements
+        # tests/test_docs.py compares the README against the metrics file that
+        # the step above just rewrote, so documentation cannot drift.
+        run: python -m unittest tests.test_docs -v
+
+      - name: Summarise the measured results
+        if: always()
+        run: |
+          {
+            echo "## Measured results"
+            echo
+            python - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("eval/results/metrics.json")
+          if not p.exists():
+              print("_No metrics produced._"); raise SystemExit
+          m = json.loads(p.read_text())
+          print("| Scenario | Module | Delay | False alarms | Samples |")
+          print("|---|---|---|---|---|")
+          for s in m["scenarios"]:
+              if not s["detections"]:
+                  print(f"| {s['scenario']} | _(none expected)_ | - | "
+                        f"**{s['false_alarm_episodes']}** | {s['samples_ingested']:,} |")
+              for d in s["detections"]:
+                  delay = f"{d['delay_min']:.1f} min" if d["detected"] else "**MISSED**"
+                  print(f"| {s['scenario']} | {d['module']} | {delay} | "
+                        f"{s['false_alarm_episodes']} | {s['samples_ingested']:,} |")
+          total = sum(s["samples_ingested"] for s in m["scenarios"])
+          fa = sum(s["false_alarm_episodes"] for s in m["scenarios"])
+          missed = sum(len(s.get("missed", [])) for s in m["scenarios"])
+          print()
+          print(f"**{missed} missed detections, {fa} false alarms across {total:,} samples.**")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the measured results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: measured-results
+          path: eval/results/
+          if-no-files-found: warn
+
+  site:
+    name: Static site builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the site without the runtime
+        # --no-pyodide keeps this check fast: it proves the scenario data and
+        # the engine bundle build, which is what could actually break. The
+        # deploy workflow vendors the runtime for real.
+        run: python scripts/build_site.py --out site --no-pyodide
+      - name: Check the output
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          m = json.loads(pathlib.Path("site/data/manifest.json").read_text())
+          assert m["scenarios"], "no scenarios were built"
+          assert pathlib.Path("site/data/engine-bundle.zip").exists(), "engine bundle missing"
+          for required in ("index.html", "app.js", "sources.js", "engine-worker.js",
+                           "charts.js", "styles.css", ".nojekyll"):
+              assert pathlib.Path("site", required).exists(), f"{required} missing from the site"
+          print(f"{len(m['scenarios'])} scenarios, "
+                f"{sum(s['frames'] for s in m['scenarios'])} frames total")
+          PY
+
+  infra:
+    name: CDK synthesises
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: pip install -r requirements.txt
+
+      - name: Synthesise
+        # A stack that does not synthesise is a diagram. No AWS credentials are
+        # needed or used: synth renders CloudFormation locally.
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: "000000000000"
+          CDK_DEFAULT_REGION: ap-south-1
+        run: npx --yes cdk@2 synth --quiet
+
+      - name: Count what gets deployed
+        run: |
+          {
+            echo "## AWS footprint"
+            echo
+            grep -ohE 'AWS::[A-Za-z0-9]+::[A-Za-z0-9]+' infra/cdk.out/*.template.json \
+              | sort | uniq -c | sort -rn \
+              | awk 'BEGIN{print "| Count | Resource |"; print "|---|---|"} {print "| "$1" | `"$2"` |"}'
+          } >> "$GITHUB_STEP_SUMMARY"

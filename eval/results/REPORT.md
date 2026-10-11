@@ -1,6 +1,6 @@
 # AquaSentinel -- measured results
 
-Generated 2026-10-11T05:13:26Z by `eval/run_eval.py` against engine v1.0.0.
+Generated 2026-10-11T09:03:04Z by `eval/run_eval.py` against engine v1.0.0.
 
 Every figure below comes from driving the simulated rig through the real detection
 engine and comparing against the simulator's ground truth. Reproduce with `make eval`.

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-11T05:13:26Z",
+  "generated_at": "2026-10-11T09:03:04Z",
   "engine_version": "1.0.0",
   "site": {
     "capacity_l": 5000.0,
@@ -44,7 +44,7 @@
         "note": "Not enough history to test a weather-aware model (23/48 samples). Showing the baseline."
       },
       "role": "warm-up and false-alarm test",
-      "wall_clock_s": 7.1
+      "wall_clock_s": 5.4
     },
     {
       "scenario": "flood",
@@ -97,7 +97,7 @@
         "n_holdout": 0,
         "note": "Not enough history to test a weather-aware model (25/48 samples). Showing the baseline."
       },
-      "wall_clock_s": 0.7
+      "wall_clock_s": 0.4
     },
     {
       "scenario": "leak",
@@ -150,7 +150,7 @@
         "n_holdout": 0,
         "note": "Not enough history to test a weather-aware model (33/48 samples). Showing the baseline."
       },
-      "wall_clock_s": 3.0
+      "wall_clock_s": 2.4
     },
     {
       "scenario": "depletion",
@@ -212,7 +212,7 @@
         "n_holdout": 0,
         "note": "Not enough history to test a weather-aware model (37/48 samples). Showing the baseline."
       },
-      "wall_clock_s": 4.2
+      "wall_clock_s": 3.5
     },
     {
       "scenario": "heatwave",
@@ -295,7 +295,7 @@
         "n_holdout": 15,
         "note": "Baseline retained: the weather-aware model did not beat it on held-out data (18.12 vs 13.88 L/h)."
       },
-      "wall_clock_s": 10.7
+      "wall_clock_s": 8.7
     },
     {
       "scenario": "outage",
@@ -402,7 +402,7 @@
         "flagged_as_degraded": 87,
         "flagged_pct": 48.1
       },
-      "wall_clock_s": 0.2
+      "wall_clock_s": 0.1
     },
     {
       "scenario": "longhaul",
@@ -479,7 +479,7 @@
         "n_holdout": 90,
         "note": "Weather-aware model adopted: held-out MAE 23.85 L/h vs baseline 29.99 L/h."
       },
-      "wall_clock_s": 19.0
+      "wall_clock_s": 15.4
     },
     {
       "scenario": "demo",
@@ -588,7 +588,7 @@
         "n_holdout": 14,
         "note": "Baseline retained: the weather-aware model did not beat it on held-out data (120.54 vs 118.45 L/h)."
       },
-      "wall_clock_s": 3.5
+      "wall_clock_s": 2.7
     }
   ]
 }

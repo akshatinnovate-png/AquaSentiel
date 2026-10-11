@@ -25,7 +25,7 @@ benefits, not guaranteed outcomes.
 - [x] Sensor-fault handling: disconnected, frozen, out-of-range
 - [x] Dashboard, six views, every value badged by provenance
 - [x] AWS deployment — 17 services, 100 resources, CDK, clean synth
-- [x] 103 tests, including one regression test per bug found
+- [x] 104 tests, including one regression test per bug found
 - [x] Measurement harness with ground truth and published sample counts
 - [x] Limitations documented
 

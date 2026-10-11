@@ -125,10 +125,18 @@ def supply_outlook(results: dict[str, ModuleResult], cfg: SiteConfig) -> dict:
         out["note"] = f"Projected to last about {eta_f:.1f} h under forecast demand. Estimate, from the {src}."
     else:
         kept = out.get("remaining_after_horizon_l")
-        tail = (f" Beyond that the forecast does not reach; at the current draw the estimate is "
-                f"{eta_c:.1f} h." if eta_c else
-                " Beyond that the forecast does not reach, and the current draw is too low to "
-                "project from.")
+        # A precise-looking "169.9 h" off a near-zero overnight draw claims an
+        # accuracy the measurement cannot support. Past a couple of days the
+        # honest statement is the bound, not the number.
+        if not eta_c:
+            tail = (" Beyond that the forecast does not reach, and the current draw is too "
+                    "low to project from.")
+        elif eta_c > 48:
+            tail = (" Beyond that the forecast does not reach; the current draw is low enough "
+                    "that the tank would last more than two days at this rate.")
+        else:
+            tail = (f" Beyond that the forecast does not reach; at the current draw the "
+                    f"estimate is {eta_c:.1f} h.")
         out["note"] = (
             f"Forecast demand over the next {horizon} h is {forecast_total:.0f} L, which this "
             f"tank covers"
