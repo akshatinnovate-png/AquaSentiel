@@ -189,9 +189,33 @@ class Engine:
         problems: list[str] = []
         severity = Severity.OK
 
-        if rejected:
-            problems.append(f"{len(rejected)} sensor reading(s) outside their physical range: {', '.join(sorted(rejected))}")
+        # A single dropped or out-of-range reading is ordinary sensor
+        # behaviour -- a DHT22 drops roughly one sample in a hundred. Raising
+        # a WARNING for each one filled the alert history with dozens of
+        # "node health, cleared" entries and buried the alerts that mattered.
+        # A fault is a *rate*, so we look at the recent history.
+        for name in rejected:
+            st.reject_history.append([reading.ts, name])
+        if len(st.reject_history) > 120:
+            del st.reject_history[: len(st.reject_history) - 120]
+        window_start = reading.ts - self.REJECT_WINDOW_S
+        recent = [m for ts_, m in st.reject_history if ts_ >= window_start]
+        persistent = sorted({m for m in recent if recent.count(m) >= self.REJECT_FAULT_COUNT})
+
+        if persistent:
+            problems.append(
+                f"sensor reading(s) repeatedly outside their physical range: "
+                f"{', '.join(persistent)} "
+                f"({self.REJECT_FAULT_COUNT}+ rejections in the last "
+                f"{self.REJECT_WINDOW_S / 60:.0f} min)"
+            )
             severity = Severity.WARNING
+        elif rejected:
+            problems.append(
+                f"{len(rejected)} reading(s) dropped this sample ({', '.join(sorted(rejected))}); "
+                f"isolated, so not treated as a fault"
+            )
+            severity = Severity(max(int(severity), int(Severity.INFO)))
         if stale:
             problems.append(f"last reading is {age_s/60:.0f} min old (expected every {self.cfg.sample_interval_s}s)")
             severity = Severity(max(int(severity), int(Severity.WARNING)))
@@ -233,6 +257,10 @@ class Engine:
             ),
             evidence=[{"signal": "reading_age_s", "value": round(age_s, 1),
                        "threshold": self.cfg.stale_after_s, "note": "freshness of the latest sample"}]
+            + ([{"signal": "rejected_in_window", "value": len(recent),
+                 "threshold": self.REJECT_FAULT_COUNT,
+                 "note": f"out-of-range readings in the last {self.REJECT_WINDOW_S / 60:.0f} min"}]
+               if persistent else [])
             + ([{"signal": "sensor_variance", "value": 0.0, "threshold": None,
                  "note": f"no variation at all in {', '.join(flatlined)} over the check window"}]
                if flatlined else []),
@@ -255,6 +283,10 @@ class Engine:
     # quantity -- a dry channel, a tank between draws -- is not accused.
     FLATLINE_WINDOW_S = 600.0
     FLATLINE_MIN_SAMPLES = 20
+    # How many rejections of one metric, within this window, make it a fault
+    # rather than ordinary sensor noise.
+    REJECT_WINDOW_S = 600.0
+    REJECT_FAULT_COUNT = 4
 
     def _flatlined(self, st: DeviceState, now: float) -> list[str]:
         """Metrics that have not moved at all, which a real sensor never does.

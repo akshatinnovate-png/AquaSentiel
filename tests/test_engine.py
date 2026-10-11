@@ -348,3 +348,86 @@ class TestAlertPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSensorNoiseIsNotAFault(unittest.TestCase):
+    """One dropped reading in a hundred is a working sensor, not a fault.
+
+    Treating each as a WARNING filled the alert history with dozens of
+    "node health, cleared" entries and buried the alerts that mattered.
+    """
+
+    def setUp(self):
+        self.engine = Engine(cfg_for_tests())
+
+    def test_an_isolated_bad_reading_is_noted_not_alerted(self):
+        st = DeviceState("n1")
+        feed(self.engine, st, 10, temperature_c=30.0, humidity_pct=50.0)
+        # Contiguous with the previous sample: a time jump here would be a
+        # transmission gap, which is a different condition with its own alert.
+        ts = T0 + 10 * 15
+        res = self.engine.ingest(
+            {"device_id": "n1", "timestamp": ts,
+             "readings": {"temperature_c": 999, "humidity_pct": 50}}, st, now=ts)
+        dev = res.modules["device"]
+        self.assertLessEqual(int(dev.severity), int(Severity.INFO),
+                             "a single dropout must not raise a device alert")
+        self.assertIn("isolated", dev.reason)
+
+    def test_evenly_spaced_dropouts_never_alert(self):
+        """The deterministic guarantee: isolated dropouts, however many, are
+        never a fault as long as they do not cluster."""
+        st = DeviceState("n1")
+        alerts = 0
+        for i in range(400):
+            ts = T0 + i * 15
+            # Jitter the good readings. A real sensor never reports an
+            # identical float 400 times running -- and if it did, the
+            # flatline detector would be right to flag it.
+            temp = 999.0 if i % 40 == 0 else 30.0 + (i % 7) * 0.1
+            res = self.engine.ingest(
+                {"device_id": "n1", "timestamp": ts,
+                 "readings": {"temperature_c": temp,
+                              "humidity_pct": 50.0 + (i % 5) * 0.1}}, st, now=ts)
+            alerts += sum(1 for a in res.alerts if a.module == "device" and a.state == "active")
+        self.assertEqual(alerts, 0, f"evenly spaced dropouts raised {alerts} device alerts")
+
+    def test_repeated_bad_readings_are_a_fault(self):
+        st = DeviceState("n1")
+        res = None
+        for i in range(8):
+            ts = T0 + i * 15
+            res = self.engine.ingest(
+                {"device_id": "n1", "timestamp": ts,
+                 "readings": {"temperature_c": 999, "humidity_pct": 50}}, st, now=ts)
+        dev = res.modules["device"]
+        self.assertGreaterEqual(int(dev.severity), int(Severity.WARNING),
+                                "a sensor rejecting every reading is faulty")
+        self.assertIn("repeatedly", dev.reason)
+
+    def test_a_realistic_dropout_rate_is_nearly_silent(self):
+        """A 1% dropout rate must produce almost no device alerts.
+
+        Not *zero*: dropouts are random, and four landing inside one ten-minute
+        window genuinely does look like a failing sensor -- that is ten times
+        the expected rate, and the detector is right to say so. The guarantee
+        is that this is rare. Across ten seeds and 4,000 samples the old
+        per-sample rule raised hundreds of alerts; this asserts single digits.
+        """
+        import random
+
+        total = 0
+        for seed in range(10):
+            rng = random.Random(seed)
+            st = DeviceState("n1")
+            for i in range(400):
+                ts = T0 + i * 15
+                temp = 999.0 if rng.random() < 0.01 else 30.0 + rng.gauss(0, 0.2)
+                res = self.engine.ingest(
+                    {"device_id": "n1", "timestamp": ts,
+                     "readings": {"temperature_c": temp,
+                                  "humidity_pct": 50.0 + rng.gauss(0, 0.5)}}, st, now=ts)
+                total += sum(1 for a in res.alerts
+                             if a.module == "device" and a.state == "active")
+        self.assertLessEqual(total, 5,
+                             f"a 1% dropout rate raised {total} device alerts over 4,000 samples")

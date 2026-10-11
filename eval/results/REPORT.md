@@ -1,6 +1,6 @@
 # AquaSentinel -- measured results
 
-Generated 2026-10-11T05:04:17Z by `eval/run_eval.py` against engine v1.0.0.
+Generated 2026-10-11T05:13:26Z by `eval/run_eval.py` against engine v1.0.0.
 
 Every figure below comes from driving the simulated rig through the real detection
 engine and comparing against the simulator's ground truth. Reproduce with `make eval`.
@@ -16,7 +16,7 @@ engine and comparing against the simulator's ground truth. Reproduce with `make 
 | heatwave | demand | yes | 1.0 min | 0 | 17282 |
 | heatwave | tank | yes | 48.2 min | 0 | 17282 |
 | outage | flood | yes | 8.3 min | 0 | 722 |
-| sensor_fault | device | yes | 0.0 min | 0 | 542 |
+| sensor_fault | device | yes | 0.5 min | 0 | 542 |
 | longhaul | demand | yes | 4.0 min | 0 | 40322 |
 | demo | demand | yes | 2.0 min | 0 | 7202 |
 | demo | flood | yes | 2.5 min | 0 | 7202 |
@@ -61,7 +61,7 @@ engine and comparing against the simulator's ground truth. Reproduce with `make 
 - **depletion**: 36 implausible readings rejected.
 - **heatwave**: 86 implausible readings rejected.
 - **outage**: 6 implausible readings rejected; 144 buffered records replayed after the outage.
-- **sensor_fault**: 96 implausible readings rejected; 49.7% of faulted samples flagged as degraded (90/181).
+- **sensor_fault**: 96 implausible readings rejected; 48.1% of faulted samples flagged as degraded (87/181).
 - **longhaul**: 196 implausible readings rejected.
 - **demo**: 34 implausible readings rejected.
 

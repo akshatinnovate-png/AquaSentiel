@@ -2,7 +2,7 @@
 
 Two separate things, and the distinction matters:
 
-- **`make test`** — 99 unit and integration tests. Does the code do what it says?
+- **`make test`** — 103 unit and integration tests. Does the code do what it says?
 - **`make eval`** — drives the real engine over simulated scenarios and scores
   it against the simulator's own ground truth. Does the *detector* work, and
   how well?
@@ -98,7 +98,7 @@ module errored. A crashing detector is a hard failure, not a scoring footnote.
 ## The test suite
 
 ```bash
-make test        # 99 tests, under a second
+make test        # 103 tests, under a second
 ```
 
 | File | Covers |

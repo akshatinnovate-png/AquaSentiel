@@ -32,7 +32,7 @@ a downpour onto a blocked drain. You will watch all four modules fire in order.
 
 ```bash
 make eval     # measure the detectors; writes eval/results/REPORT.md
-make test     # 99 unit and integration tests
+make test     # 103 unit and integration tests
 make deploy   # push the whole thing to AWS (100 resources, 17 services)
 ```
 
@@ -82,7 +82,7 @@ counts: **[eval/results/REPORT.md](eval/results/REPORT.md)**.
 | heat spell | tank | **48.3 min** | 0 | 17,282 |
 | 14 days of operation | demand | **4.0 min** | 0 | 40,322 |
 | 12-min uplink outage | flood | **8.3 min** | 0 | 722 |
-| sensor disconnected | device health | **0.0 min** | 0 | 542 |
+| sensor disconnected | device health | **0.5 min** | 0 | 542 |
 | full 30 h demo | all four | 2.0 / 2.5 / 31.0 / 39.5 min | 0 | 7,202 |
 
 **Zero missed detections and zero false alarms across all nine scenarios and
@@ -152,7 +152,7 @@ local/      a stdlib server exposing the same API offline
 web/        the dashboard — no build step, no external script or font
 infra/      AWS CDK stack
 eval/       the measurement harness that produced the table above
-tests/      99 tests, including one regression test per bug found
+tests/      103 tests, including one regression test per bug found
 ```
 
 ---
@@ -197,6 +197,11 @@ over-claiming hard:
 - **A dead sensor reads "unavailable", never zero** — including one that
   freezes at a plausible value, caught by its variance collapsing to exactly
   zero.
+- **A fault is a rate, not an event.** A sensor dropping one reading in a
+  hundred is working normally; alerting on each one filled the history with
+  dozens of "node health, cleared" entries and buried the alerts that
+  mattered. A fault now needs four rejections in ten minutes — which costs
+  30 seconds of detection delay on a disconnected sensor, and is worth it.
 - **A projection cannot outrank the measurement it is built on.** A half-full
   tank does not reach WARNING because a lunchtime peak implies a short ETA.
 - **Amazon Bedrock explains, it never decides.** Severities come from

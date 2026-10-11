@@ -11,7 +11,7 @@ pandas, no scikit-learn. Every consequence below falls out of that:
 |---|---|
 | it runs unchanged in Lambda | no layers, no container, no build step; the deploy asset is the repo |
 | it runs unchanged on a laptop | `make demo` needs no AWS account and no `pip install` |
-| it runs unchanged in the test suite | 99 tests exercise the code that actually ships |
+| it runs unchanged in the test suite | 103 tests exercise the code that actually ships |
 | it runs unchanged in the eval harness | the published detection figures describe production code |
 
 The alternative — a cloud implementation and a separate "demo mode" — produces
@@ -223,6 +223,9 @@ one is covered by a regression test named for the symptom.
 | Stopped turbine read 0.03 L/min | noise applied after the cut-in check | a turbine below cut-in emits no pulses; the reading is exactly zero |
 | 2,398 L/h draw in the live demo | warmup and live run shared device state, interleaving two timelines | carry the learned baselines across; reset the timeline |
 | Every page reported "clock out by 362 days" | the simulator's epoch was a fixed date in the past | fixed epoch for reproducible evaluation; anchored to now for live runs |
+| Two alerts for one tank, quoting different numbers | escalating opened a new episode and left the old one open | the earlier episode is closed as `superseded` |
+| Alert history made almost entirely of "node health, cleared" | a single dropped reading counted as a device fault | a fault is four rejections in ten minutes, not one |
+| "Forecast demand is 0 L, which this tank covers with 0 L to spare" | the empty-tank case fell through to the forecast wording | check for an empty tank before the forecast, and say so plainly |
 
 Most of these were found by the evaluation harness, not by a human reading the
 code — which is the argument for building the harness before the user interface.

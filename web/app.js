@@ -509,7 +509,12 @@
     for (const id in state.details) {
       for (const a of state.details[id].alerts || []) allAlerts.push(a);
     }
-    allAlerts.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    // Open items first, then by recency. A long run accumulates cleared
+    // node-health entries, and burying a live CRITICAL under them is exactly
+    // the failure this page exists to prevent.
+    const rank = (a) => (a.state === "active" ? 0 : a.state === "acknowledged" ? 1 : 2);
+    allAlerts.sort((a, b) => rank(a) - rank(b) || (b.ts || 0) - (a.ts || 0));
+    const openCount = allAlerts.filter((a) => rank(a) < 2).length;
 
     const scenarios = (m && m.scenarios) || [];
     const detectionRows = scenarios.flatMap((s) =>
@@ -554,7 +559,8 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head"><h2>Alert history <span class="n">${allAlerts.length}</span></h2></div>
+        <div class="panel-head"><h2>Alert history <span class="n">${allAlerts.length}</span></h2>
+        <span class="hint">${openCount} open, ${allAlerts.length - openCount} closed &middot; open first</span></div>
         ${allAlerts.length ? allAlerts.slice(0, 25).map((a) => alertCard(a)).join("") : `<div class="empty"><span class="big">◌</span>No alerts recorded yet.</div>`}
       </div>`;
   }

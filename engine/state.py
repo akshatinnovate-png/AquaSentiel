@@ -307,6 +307,10 @@ class DeviceState:
         # "this node has no climate sensor" apart from "the climate sensor
         # missed this one sample" -- which look identical in a single reading.
         self.seen_modules: list[str] = []
+        # Recent (timestamp, metric) rejections. A sensor that drops one
+        # reading in a hundred is behaving normally; one that keeps dropping
+        # them is faulty. Telling those apart needs a short memory.
+        self.reject_history: list[list] = []
 
     # -- ingestion ---------------------------------------------------------
     def s(self, name: str) -> Series:
@@ -355,6 +359,7 @@ class DeviceState:
             "usage_hour_hi_sum": round(self.usage_hour_hi_sum, 4),
             "usage_hour_n": self.usage_hour_n,
             "seen_modules": list(self.seen_modules),
+            "reject_history": [[round(ts, 1), m] for ts, m in self.reject_history[-60:]],
         }
 
     @classmethod
@@ -390,4 +395,5 @@ class DeviceState:
         st.usage_hour_hi_sum = float(d.get("usage_hour_hi_sum", 0.0))
         st.usage_hour_n = int(d.get("usage_hour_n", 0))
         st.seen_modules = list(d.get("seen_modules") or [])
+        st.reject_history = [[float(x[0]), str(x[1])] for x in (d.get("reject_history") or [])]
         return st

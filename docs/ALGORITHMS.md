@@ -175,6 +175,10 @@ half hours — it could not have learned a daily shape if it tried.
 
 - **Implausible values** rejected at the trust boundary against declared
   physical ranges, flagged rather than dropped so a faulty sensor is visible.
+  A *fault*, though, is a rate: four rejections of the same metric within ten
+  minutes, not a single dropped sample. A DHT22 drops roughly one reading in a
+  hundred, and treating each as a fault produced an alert history made almost
+  entirely of node-health entries that cleared seconds later.
 - **Stale readings** — freshness on the server's clock, at read time.
 - **Clock skew** — reported separately from staleness.
 - **Transmission gaps** — counted, and back-filled records flagged `buffered`.
